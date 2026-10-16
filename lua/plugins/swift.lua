@@ -26,4 +26,11 @@ return {
       },
     },
   },
+  {
+    "mfussenegger/nvim-lint",
+    -- nvim-lint's swiftlint uses the nearest .swiftlint.yml, or SwiftLint's
+    -- default rules without one. Its linter is a function, so LazyVim can't
+    -- merge a `condition` into it the way it can for table linters.
+    opts = { linters_by_ft = { swift = { "swiftlint" } } },
+  },
 }
