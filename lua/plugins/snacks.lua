@@ -2,16 +2,6 @@ return {
   {
     "folke/snacks.nvim",
     opts = {
-      picker = {
-        sources = {
-          explorer = {
-            watch = true,
-            follow_file = true,
-            hidden = true,
-            ignored = true,
-          },
-        },
-      },
       dashboard = {
         sections = {
           { section = "header" },
