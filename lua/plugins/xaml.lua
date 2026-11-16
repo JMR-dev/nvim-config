@@ -4,6 +4,7 @@ return {
     init = function()
       vim.filetype.add({
         extension = {
+          plist = "xml",
           xaml = "xaml",
         },
       })
