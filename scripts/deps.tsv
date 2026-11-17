@@ -1,0 +1,55 @@
+# Dependencies for scripts/install.sh and scripts/install.ps1. Both scripts read
+# this file, so it is the only list to edit.
+#
+# Columns are tab-separated and every field must be non-empty:
+#   group   which --with/--without group the row belongs to
+#   name    label shown in the output
+#   probe   command(s) proving it is installed: "a|b" means either;
+#           "@x" calls a custom probe in each script
+#   min     minimum version read from `<probe> --version`, or "-"
+#   brew apt dnf pacman winget
+#           packages to install: a space-separated list, "cask:x" for a
+#           Homebrew cask, "@x" for a custom installer in the script,
+#           "?" when there is no package (the script warns), "-" when the
+#           row does not apply on that platform (skipped silently)
+#
+# Keep this file ASCII: Windows PowerShell 5.1 reads it in the ANSI code page.
+#
+# winget IDs not yet checked against `winget search`: PHP.PHP.8.4,
+# Erlang.ErlangOTP, Swift.Toolchain, Microsoft.DotNet.SDK.10. A wrong ID only
+# produces a warning.
+group	name	probe	min	brew	apt	dnf	pacman	winget
+core	git	git	-	git	git	git	git	Git.Git
+core	curl	curl	-	curl	curl	curl	curl	-
+core	unzip	unzip	-	-	unzip	unzip	unzip	-
+core	C compiler	@cc	-	@xcode_clt	build-essential	gcc make	base-devel	BrechtSanders.WinLibs.POSIX.UCRT
+core	Neovim	nvim	0.11.2	neovim	@neovim	@neovim	neovim	Neovim.Neovim
+core	ripgrep	rg	-	ripgrep	ripgrep	ripgrep	ripgrep	BurntSushi.ripgrep.MSVC
+core	fd	fd|fdfind	-	fd	fd-find	fd-find	fd	sharkdp.fd
+core	fzf	fzf	-	fzf	fzf	fzf	fzf	junegunn.fzf
+core	lazygit	lazygit	-	lazygit	@lazygit	@lazygit	lazygit	JesseDuffield.lazygit
+core	7-Zip	7z	-	-	-	-	-	@sevenzip
+node	Node.js	node	22	node	@node	nodejs npm	nodejs npm	OpenJS.NodeJS.LTS
+python	Python 3	@python	-	python	python3 python3-pip	python3 python3-pip	python python-pip	Python.Python.3.13
+python	Python venv	@pyvenv	-	-	python3-venv	-	-	-
+go	Go	go	-	go	golang-go	golang	go	GoLang.Go
+dotnet	.NET SDK	@dotnet	-	cask:dotnet-sdk	@dotnet	@dotnet	dotnet-sdk	Microsoft.DotNet.SDK.10
+ruby	Ruby + ruby-lsp	@ruby	-	@ruby	@ruby	@ruby	@ruby	@ruby
+java	JDK	java	21	cask:temurin@21	openjdk-21-jdk-headless	java-21-openjdk-devel	jdk21-openjdk	EclipseAdoptium.Temurin.21.JDK
+php	PHP	php	-	php	php-cli	php-cli	php	PHP.PHP.8.4
+beam	Erlang/OTP	erl	-	erlang	erlang	erlang	erlang	Erlang.ErlangOTP
+beam	Elixir	elixir	-	elixir	elixir	elixir	elixir	?
+rust	rustup	cargo	-	@rustup	@rustup	@rustup	@rustup	Rustlang.Rustup
+tools	Zig	zig	-	zig	?	zig	zig	zig.zig
+tools	Terraform	terraform	-	hashicorp/tap/terraform	?	?	terraform	Hashicorp.Terraform
+tools	Helm	helm	-	helm	?	helm	helm	Helm.Helm
+tools	Bazelisk	bazel|bazelisk	-	bazelisk	@bazelisk	@bazelisk	@bazelisk	Bazel.Bazelisk
+swift	Swift toolchain	swift	-	@xcode_clt	?	?	?	Swift.Toolchain
+swift	SwiftLint	swiftlint	-	swiftlint	?	?	?	?
+xcode	xcp	xcp	-	xcp	-	-	-	-
+xcode	xcode-build-server	xcode-build-server	-	xcode-build-server	-	-	-	-
+xcode	xcbeautify	xcbeautify	-	xcbeautify	-	-	-	-
+xcode	jq	jq	-	jq	-	-	-	-
+xcode	coreutils	stdbuf|gstdbuf	-	coreutils	-	-	-	-
+xcode	pipx	pipx	-	pipx	-	-	-	-
+xcode	pymobiledevice3	pymobiledevice3	-	@pymobiledevice3	-	-	-	-

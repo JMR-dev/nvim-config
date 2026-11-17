@@ -30,7 +30,14 @@ return {
     "mfussenegger/nvim-lint",
     -- nvim-lint's swiftlint uses the nearest .swiftlint.yml, or SwiftLint's
     -- default rules without one. Its linter is a function, so LazyVim can't
-    -- merge a `condition` into it the way it can for table linters.
-    opts = { linters_by_ft = { swift = { "swiftlint" } } },
+    -- merge a `condition` into it the way it can for table linters. LazyVim
+    -- also runs listed linters without checking they're installed, so list it
+    -- only where the binary exists (not on Windows or most Linux machines).
+    opts = function(_, opts)
+      if vim.fn.executable("swiftlint") == 1 then
+        opts.linters_by_ft = opts.linters_by_ft or {}
+        opts.linters_by_ft.swift = { "swiftlint" }
+      end
+    end,
   },
 }
