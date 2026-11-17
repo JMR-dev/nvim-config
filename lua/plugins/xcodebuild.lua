@@ -11,9 +11,15 @@ local function in_xcode_project()
     or vim.uv.fs_stat(cwd .. "/.nvim/xcodebuild") ~= nil
 end
 
-return {
+local is_mac = vim.fn.has("mac") == 1
+
+local specs = {
   {
     "wojciech-kulik/xcodebuild.nvim",
+    -- xcodebuild, the simulators and Xcode itself exist only on macOS. With
+    -- `cond` rather than deleting the spec elsewhere, lazy.nvim keeps the
+    -- plugin's lazy-lock.json entry, so the shared lockfile doesn't churn.
+    cond = is_mac,
     -- In an Xcode project, load at startup rather than on first use so the
     -- neo-tree integration syncs the project from the first file operation.
     -- Elsewhere, wait for a key or command so neo-tree stays lazy.
@@ -55,22 +61,32 @@ return {
       { "<leader>Xx", dap_action("terminate_session"), desc = "Stop Debugger" },
     },
   },
-  {
-    -- Registers the iOS debug configuration when nvim-dap first loads, so
-    -- the debugger stays lazy like the rest of LazyVim's dap setup.
-    "mfussenegger/nvim-dap",
-    optional = true,
-    opts = function()
-      require("xcodebuild.integrations.dap").setup()
-    end,
-  },
-  {
-    "folke/which-key.nvim",
-    optional = true,
-    opts = {
-      spec = {
-        { "<leader>X", group = "xcode", icon = " " },
+}
+
+-- These extend nvim-dap and which-key, so they can't take `cond`: it would
+-- apply to those whole plugins. Leave them out off macOS instead, where the
+-- dap setup would fail to require xcodebuild and the group would be empty.
+if is_mac then
+  vim.list_extend(specs, {
+    {
+      -- Registers the iOS debug configuration when nvim-dap first loads, so
+      -- the debugger stays lazy like the rest of LazyVim's dap setup.
+      "mfussenegger/nvim-dap",
+      optional = true,
+      opts = function()
+        require("xcodebuild.integrations.dap").setup()
+      end,
+    },
+    {
+      "folke/which-key.nvim",
+      optional = true,
+      opts = {
+        spec = {
+          { "<leader>X", group = "xcode", icon = " " },
+        },
       },
     },
-  },
-}
+  })
+end
+
+return specs

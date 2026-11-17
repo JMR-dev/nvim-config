@@ -1,0 +1,4 @@
+# install.sh and deps.tsv are read by bash, which chokes on CRLF; keep them LF
+# even in checkouts made with core.autocrlf=true on Windows.
+*.sh text eol=lf
+*.tsv text eol=lf
