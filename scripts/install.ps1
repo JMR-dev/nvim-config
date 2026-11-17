@@ -25,7 +25,7 @@ Groups to remove.
 Install as NVIM_APPNAME=<name>, beside your current setup.
 
 .PARAMETER Fresh
-Also move aside Neovim's data and cache dirs.
+Also move aside Neovim's data, state and cache dirs.
 
 .PARAMETER Font
 Nerd Font to install (default JetBrainsMono; "none" skips).
@@ -48,6 +48,11 @@ powershell -ExecutionPolicy Bypass -File scripts\install.ps1
 .EXAMPLE
 powershell -ExecutionPolicy Bypass -File scripts\install.ps1 -Preset full -Without php
 
+.EXAMPLE
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/JMR-dev/nvim-config/main/scripts/install.ps1))) -Preset default
+
+Without a clone: clones the config into %LOCALAPPDATA%\nvim and runs that copy.
+
 .NOTES
 Written for Windows PowerShell 5.1 so it runs on a fresh machine. Keep this
 file ASCII: 5.1 reads scripts without a BOM in the ANSI code page.
@@ -67,12 +72,87 @@ param(
     [switch]$DryRun
 )
 
+# --- bootstrap ------------------------------------------------------------------
+# Run as a one-liner, or from a file outside a checkout: clone the config, then
+# run the cloned copy in its own process. This part stays above the settings
+# below and never calls `exit`, so a one-liner run inside your PowerShell
+# session neither changes that session nor closes its window. Everything after
+# it only runs from a file inside a checkout.
+
+$invokedAs = $MyInvocation.MyCommand
+$fileMode = [bool]($invokedAs -and $invokedAs.CommandType -eq 'ExternalScript')
+$fromCheckout = $false
+if ($fileMode) {
+    $checkout = Split-Path -Parent $PSScriptRoot
+    $fromCheckout = (Test-Path -LiteralPath (Join-Path $checkout 'lua\config\lazy.lua')) -and
+        (Test-Path -LiteralPath (Join-Path $checkout 'scripts\deps.tsv'))
+}
+
+if (-not $fromCheckout) {
+    $name = $AppName
+    if (-not $name) { $name = $env:NVIM_APPNAME }
+    if (-not $name) { $name = 'nvim' }
+    $base = $env:XDG_CONFIG_HOME
+    if (-not $base) { $base = $env:LOCALAPPDATA }
+    $configDir = Join-Path $base $name
+    $next = Join-Path $configDir 'scripts\install.ps1'
+    Write-Host 'Neovim config setup: fetching the config'
+    if (Test-Path -LiteralPath $next) {
+        Write-Host "  found a checkout at $configDir"
+    }
+    elseif ($DryRun) {
+        Write-Host "  [dry-run] git clone $RepoUrl $configDir, then run its scripts\install.ps1"
+        return
+    }
+    else {
+        if (-not (Get-Command git -CommandType Application -ErrorAction SilentlyContinue)) {
+            if (-not (Get-Command winget -CommandType Application -ErrorAction SilentlyContinue)) {
+                Write-Host 'error: git and winget are both missing; install "App Installer" from the Microsoft Store' -ForegroundColor Red
+                return
+            }
+            & winget install --exact --id Git.Git --source winget --silent --accept-source-agreements --accept-package-agreements
+            $env:Path = @([Environment]::GetEnvironmentVariable('Path', 'Machine'),
+                [Environment]::GetEnvironmentVariable('Path', 'User'), $env:Path) -join ';'
+        }
+        if (Get-Item -LiteralPath $configDir -Force -ErrorAction SilentlyContinue) {
+            $backup = "$configDir.bak.$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+            Move-Item -LiteralPath $configDir -Destination $backup -ErrorAction Stop
+            Write-Host "  moved $configDir to $backup"
+        }
+        & git clone $RepoUrl $configDir
+        if (-not (Test-Path -LiteralPath $next)) {
+            Write-Host "error: cloning $RepoUrl didn't produce scripts\install.ps1; is it the right repository?" -ForegroundColor Red
+            return
+        }
+    }
+    # A new process with -ExecutionPolicy Bypass, since the default policy
+    # blocks running the cloned file directly.
+    $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $next)
+    foreach ($key in $PSBoundParameters.Keys) {
+        $value = $PSBoundParameters[$key]
+        if ($value -is [System.Management.Automation.SwitchParameter]) {
+            if ($value.IsPresent) { $argList += "-$key" }
+            continue
+        }
+        if ($value -is [array]) { $value = $value -join ',' }
+        # 5.1 drops empty arguments to native commands, which would leave the
+        # parameter without its value.
+        if ("$value" -ne '') { $argList += @("-$key", "$value") }
+    }
+    $shell = 'powershell.exe'
+    if ($PSVersionTable.PSEdition -eq 'Core') { $shell = 'pwsh.exe' }
+    & (Join-Path $PSHOME $shell) @argList
+    if ($fileMode) { exit $LASTEXITCODE }
+    return
+}
+
+# --- settings ---------------------------------------------------------------------
+
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
-$ScriptParams = $PSBoundParameters
 $AllGroups = @('core', 'node', 'python', 'go', 'dotnet', 'ruby', 'java', 'php', 'beam', 'rust', 'tools', 'swift', 'xcode')
 $NvimMin = '0.11.2'
 $Stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
@@ -123,20 +203,31 @@ function Stop-WithError([string]$Message) {
 # --- helpers --------------------------------------------------------------------
 
 # Runs a native command with its output on the console and returns the exit
-# code. 5.1 turns redirected stderr into terminating errors under 'Stop', so
-# relax that here.
+# code, or -1 if it couldn't start. 5.1 turns redirected stderr into
+# terminating errors under 'Stop', so relax that here.
 function Invoke-Native([string]$Exe, [string[]]$Arguments = @(), [switch]$Quiet) {
     $ErrorActionPreference = 'Continue'
-    $global:LASTEXITCODE = 0
-    if ($Quiet) { & $Exe @Arguments *> $null } else { & $Exe @Arguments | Out-Host }
+    $global:LASTEXITCODE = -1
+    try {
+        if ($Quiet) { & $Exe @Arguments *> $null } else { & $Exe @Arguments | Out-Host }
+    }
+    catch {
+        return -1
+    }
     return $LASTEXITCODE
 }
 
 # Runs a native command and returns its output (stdout and stderr) as text.
+# $LASTEXITCODE stays -1 if it couldn't start.
 function Get-NativeOutput([string]$Exe, [string[]]$Arguments = @()) {
     $ErrorActionPreference = 'Continue'
-    $global:LASTEXITCODE = 0
-    $out = & $Exe @Arguments 2>&1 | ForEach-Object { "$_" }
+    $global:LASTEXITCODE = -1
+    try {
+        $out = & $Exe @Arguments 2>&1 | ForEach-Object { "$_" }
+    }
+    catch {
+        return ''
+    }
     return ($out -join "`n")
 }
 
@@ -181,12 +272,13 @@ function Test-VersionAtLeast([string]$Have, [string]$Need) {
     return $true
 }
 
-# winget doesn't update the running session's PATH; rebuild it from the registry.
+# winget doesn't update the running session's PATH. Append the registry entries
+# it lacks, keeping the session's order so a profile's or venv's tools still win.
 function Update-SessionPath {
     $parts = @($script:ExtraPath)
+    $parts += $env:Path -split ';'
     $parts += [Environment]::GetEnvironmentVariable('Path', 'Machine') -split ';'
     $parts += [Environment]::GetEnvironmentVariable('Path', 'User') -split ';'
-    $parts += $env:Path -split ';'
     $env:Path = (@($parts | Where-Object { $_ } | Select-Object -Unique)) -join ';'
 }
 
@@ -227,7 +319,10 @@ function Get-RealPath([string]$Path) {
     $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
     if (-not $item) { return $null }
     if ($item.LinkType -and $item.Target) {
-        return [IO.Path]::GetFullPath(@($item.Target)[0]).TrimEnd('\')
+        $target = @($item.Target)[0]
+        # A relative symlink target is relative to the link's folder.
+        if (-not [IO.Path]::IsPathRooted($target)) { $target = Join-Path (Split-Path -Parent $item.FullName) $target }
+        return [IO.Path]::GetFullPath($target).TrimEnd('\')
     }
     return $item.FullName.TrimEnd('\')
 }
@@ -283,7 +378,10 @@ function Install-WingetPackage([string]$Id) {
 # Mason decompresses .gz downloads (the tree-sitter CLI among them) with 7-Zip,
 # which it looks for on PATH. The 7-Zip installer doesn't add itself there.
 function Install-SevenZip {
-    $dir = Join-Path $env:ProgramFiles '7-Zip'
+    # ProgramW6432 is the 64-bit Program Files even from 32-bit PowerShell.
+    $programFiles = $env:ProgramW6432
+    if (-not $programFiles) { $programFiles = $env:ProgramFiles }
+    $dir = Join-Path $programFiles '7-Zip'
     $exe = Join-Path $dir '7z.exe'
     if (-not (Test-Path -LiteralPath $exe)) {
         if (-not (Install-WingetPackage '7zip.7zip')) { return $false }
@@ -415,71 +513,35 @@ function Select-Groups {
 function Resolve-Dirs {
     if ($env:XDG_CONFIG_HOME) { $script:ConfigDir = Join-Path $env:XDG_CONFIG_HOME $AppName }
     else { $script:ConfigDir = Join-Path $env:LOCALAPPDATA $AppName }
-    # Neovim keeps data and state together in <appname>-data on Windows.
+    # Neovim's Windows data and state dirs both end in -data; by default they
+    # are the same folder.
     if ($env:XDG_DATA_HOME) { $script:DataDir = Join-Path $env:XDG_DATA_HOME "$AppName-data" }
     else { $script:DataDir = Join-Path $env:LOCALAPPDATA "$AppName-data" }
-    $script:CacheDir = Join-Path ([IO.Path]::GetTempPath()) $AppName
+    if ($env:XDG_STATE_HOME) { $script:StateDir = Join-Path $env:XDG_STATE_HOME "$AppName-data" }
+    else { $script:StateDir = Join-Path $env:LOCALAPPDATA "$AppName-data" }
+    if ($env:XDG_CACHE_HOME) { $script:CacheDir = Join-Path $env:XDG_CACHE_HOME $AppName }
+    else { $script:CacheDir = Join-Path $env:TEMP $AppName }
 }
 
-# Sets RepoDir when this script runs from a checkout of the config.
+# The checkout this script runs from (the bootstrap above guarantees one).
 function Find-Repo {
-    if (-not $PSScriptRoot) { return }
     $candidate = Split-Path -Parent $PSScriptRoot
-    if ((Test-Path -LiteralPath (Join-Path $candidate 'lua\config\lazy.lua')) -and
-        (Test-Path -LiteralPath (Join-Path $candidate 'scripts\deps.tsv'))) {
-        $script:RepoDir = Get-RealPath $candidate
-        $script:DepsFile = Join-Path $candidate 'scripts\deps.tsv'
-    }
+    $script:RepoDir = Get-RealPath $candidate
+    $script:DepsFile = Join-Path $candidate 'scripts\deps.tsv'
 }
 
 function Backup-Item([string]$Path) {
     $dest = "$Path.bak.$Stamp"
-    Invoke-Step "move $Path to $dest" { Move-Item -LiteralPath $Path -Destination $dest }
+    Invoke-Step "move $Path to $dest" {
+        try {
+            Move-Item -LiteralPath $Path -Destination $dest
+        }
+        catch {
+            Stop-WithError "couldn't move $Path aside ($($_.Exception.Message)). Close Neovim and re-run."
+        }
+    }
     Write-Detail "moved $Path to $dest"
     $script:Backups.Add($dest)
-}
-
-# Run outside a checkout (irm | iex): clone into the config dir and hand over
-# to the copy of this script there.
-function Invoke-Standalone {
-    Write-Step 'Fetching the config'
-    if (-not (Test-Command 'git')) {
-        if (-not (Install-WingetPackage 'Git.Git')) { Stop-WithError 'git is needed to clone the config' }
-    }
-    $next = Join-Path $ConfigDir 'scripts\install.ps1'
-    if ((Test-Path -LiteralPath $next) -and (Test-Path -LiteralPath (Join-Path $ConfigDir 'scripts\deps.tsv'))) {
-        Write-Ok "found a checkout at $ConfigDir"
-    }
-    else {
-        if (Test-Exists $ConfigDir) { Backup-Item $ConfigDir }
-        Invoke-Step "git clone $RepoUrl $ConfigDir" {
-            if ((Invoke-Native 'git' @('clone', $RepoUrl, $ConfigDir)) -ne 0) { Stop-WithError "git clone $RepoUrl failed" }
-        }
-    }
-    if ($DryRun) {
-        Write-Detail "[dry-run] continue with $next"
-        exit 0
-    }
-    if (-not (Test-Path -LiteralPath $next)) { Stop-WithError "$RepoUrl has no scripts\install.ps1; is it the right repository?" }
-    # A new process with -ExecutionPolicy Bypass, since the default policy
-    # blocks running the cloned file directly.
-    $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $next)
-    foreach ($key in $ScriptParams.Keys) {
-        $value = $ScriptParams[$key]
-        if ($value -is [System.Management.Automation.SwitchParameter]) {
-            if ($value.IsPresent) { $argList += "-$key" }
-        }
-        elseif ($value -is [array]) {
-            $argList += "-$key"
-            $argList += ($value -join ',')
-        }
-        else {
-            $argList += "-$key"
-            $argList += [string]$value
-        }
-    }
-    $shell = (Get-Process -Id $PID).Path
-    exit (Invoke-Native $shell $argList)
 }
 
 function Set-ConfigLocation {
@@ -491,13 +553,18 @@ function Set-ConfigLocation {
         if (Test-Exists $ConfigDir) { Backup-Item $ConfigDir }
         # A junction needs neither admin rights nor Developer Mode, unlike a symlink.
         Invoke-Step "create junction $ConfigDir -> $RepoDir" {
-            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $ConfigDir) | Out-Null
-            New-Item -ItemType Junction -Path $ConfigDir -Target $RepoDir | Out-Null
+            try {
+                New-Item -ItemType Directory -Force -Path (Split-Path -Parent $ConfigDir) | Out-Null
+                New-Item -ItemType Junction -Path $ConfigDir -Target $RepoDir | Out-Null
+            }
+            catch {
+                Stop-WithError "couldn't link $ConfigDir to $RepoDir ($($_.Exception.Message))"
+            }
         }
         Write-Ok "linked to $RepoDir"
     }
     if ($Fresh) {
-        foreach ($dir in @($DataDir, $CacheDir)) {
+        foreach ($dir in @(@($DataDir, $StateDir, $CacheDir) | Select-Object -Unique)) {
             if (Test-Exists $dir) { Backup-Item $dir }
         }
     }
@@ -544,7 +611,7 @@ function Install-NerdFont {
         }
     }
     Write-Ok "$Font Nerd Font"
-    $script:Notes.Add("select `"$Font Nerd Font`" in Windows Terminal (Settings > Profiles > Appearance)")
+    $script:Notes.Add("select `"$Font Nerd Font`" in Windows Terminal (Settings > Profiles > Appearance); if it isn't listed, restart Windows Terminal or sign out and back in")
 }
 
 function Enable-LongPathSupport {
@@ -601,11 +668,11 @@ function Invoke-HealthCheck {
     $env:NVIM_HEALTH_LOG = $log
     $null = Invoke-Native 'nvim' @('--headless', '+checkhealth lazyvim',
         '+lua vim.fn.writefile(vim.api.nvim_buf_get_lines(0, 0, -1, false), vim.env.NVIM_HEALTH_LOG)', '+qa') -Quiet
-    if (-not (Test-Path -LiteralPath $log)) {
+    if (-not (Test-Path -LiteralPath $log) -or (Get-Item -LiteralPath $log).Length -eq 0) {
         Add-Warning "couldn't run checkhealth lazyvim"
         return
     }
-    $errors = @(Select-String -LiteralPath $log -Pattern 'ERROR' -SimpleMatch)
+    $errors = @(Select-String -LiteralPath $log -Pattern 'ERROR' -SimpleMatch -CaseSensitive)
     if ($errors.Count -gt 0) {
         Add-Warning 'checkhealth lazyvim reported errors:'
         foreach ($line in $errors) { Write-Host "           $($line.Line.Trim())" }
@@ -694,7 +761,6 @@ function Invoke-Main {
     Write-Host "  config:  $ConfigDir"
     if ($DryRun) { Write-Host '  dry run: nothing will be changed' }
 
-    if (-not $RepoDir) { Invoke-Standalone }
     Install-Dependencies
     Enable-LongPathSupport
     Install-NerdFont
@@ -704,8 +770,8 @@ function Invoke-Main {
     Write-Summary
 }
 
-# Environment variables set during the run; restored afterwards in case this
-# runs inside an interactive session (irm | iex).
+# Environment variables set during the run; restored afterwards in case the
+# script was run inside your session (.\scripts\install.ps1) rather than -File.
 $savedEnv = @{}
 foreach ($name in @('NVIM_APPNAME', 'NVIM_WARMUP', 'NVIM_HEALTH_LOG')) {
     $savedEnv[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
