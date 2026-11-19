@@ -54,12 +54,6 @@ local function is_buffer_owned(bufnr, checker)
     return true
   end
 
-  for _, client in ipairs(vim.lsp.get_clients({ bufnr = bufnr })) do
-    if checker.lsp_clients[client.name] then
-      return true
-    end
-  end
-
   if checker.lint_ns and vim.api.nvim_buf_is_loaded(bufnr) then
     local lint_ns = vim.api.nvim_get_namespaces()[checker.lint_ns]
     if lint_ns then
@@ -403,7 +397,7 @@ local function reconcile_diagnostic_changed(bufnr, diagnostics)
     if matched_lsp then
       mark_lsp_owned(checker, bufnr)
       clear_buf_worker_diagnostics(checker, bufnr)
-    elseif (checker.lint_ns or next(checker.lsp_clients) ~= nil) and is_buffer_owned(bufnr, checker) then
+    elseif checker.lint_ns and is_buffer_owned(bufnr, checker) then
       clear_buf_worker_diagnostics(checker, bufnr)
     end
   end

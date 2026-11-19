@@ -151,13 +151,10 @@ end
 ---@param bufnr integer
 ---@param diagnostics vim.Diagnostic[]
 ---@param vl_opts table
-local function render_buf_virtual_lines(virt_ns, bufnr, diagnostics, vl_opts)
+---@param state? { lnum: integer?, has_marks: boolean }
+---@param force? boolean
+local function render_buf_virtual_lines(virt_ns, bufnr, diagnostics, vl_opts, state, force)
   if not vim.api.nvim_buf_is_valid(bufnr) then
-    return
-  end
-
-  vim.api.nvim_buf_clear_namespace(bufnr, virt_ns, 0, -1)
-  if #diagnostics == 0 then
     return
   end
 
@@ -169,13 +166,27 @@ local function render_buf_virtual_lines(virt_ns, bufnr, diagnostics, vl_opts)
       return
     end
     cursor_lnum = vim.api.nvim_win_get_cursor(winid)[1] - 1
-    visible = vim.tbl_filter(function(d)
-      local end_lnum = d.end_lnum or d.lnum
-      return cursor_lnum >= d.lnum and cursor_lnum <= end_lnum
-    end, diagnostics)
+    if state and not force and state.lnum == cursor_lnum then
+      return
+    end
+    visible = #diagnostics == 0 and {}
+      or vim.tbl_filter(function(d)
+        local end_lnum = d.end_lnum or d.lnum
+        return cursor_lnum >= d.lnum and cursor_lnum <= end_lnum
+      end, diagnostics)
   end
 
+  if state and not force and #visible == 0 and not state.has_marks then
+    state.lnum = cursor_lnum
+    return
+  end
+
+  vim.api.nvim_buf_clear_namespace(bufnr, virt_ns, 0, -1)
   if #visible == 0 then
+    if state then
+      state.lnum = cursor_lnum
+      state.has_marks = false
+    end
     return
   end
 
@@ -187,6 +198,7 @@ local function render_buf_virtual_lines(virt_ns, bufnr, diagnostics, vl_opts)
     table.insert(by_anchor[anchor], diag)
   end
 
+  local placed = false
   local custom_format = type(vl_opts.format) == "function" and vl_opts.format or nil
   for anchor_lnum, line_diags in pairs(by_anchor) do
     table.sort(line_diags, function(a, b)
@@ -202,11 +214,17 @@ local function render_buf_virtual_lines(virt_ns, bufnr, diagnostics, vl_opts)
     end
 
     if #virt_lines > 0 then
+      placed = true
       vim.api.nvim_buf_set_extmark(bufnr, virt_ns, anchor_lnum, 0, {
         virt_lines = virt_lines,
         virt_lines_overflow = "scroll",
       })
     end
+  end
+
+  if state then
+    state.lnum = cursor_lnum
+    state.has_marks = placed
   end
 end
 
@@ -252,15 +270,26 @@ local function install_virtual_lines_handler()
       local virt_ns = ns.user_data.virt_lines_ns
       local augroup = ns.user_data.virt_lines_augroup
 
-      local function refresh()
-        render_buf_virtual_lines(virt_ns, bufnr, diagnostics, vl_opts)
+      local render_state = { lnum = nil, has_marks = false }
+
+      local function refresh(force)
+        render_buf_virtual_lines(virt_ns, bufnr, diagnostics, vl_opts, render_state, force)
       end
 
       if vl_opts.current_line then
-        vim.api.nvim_create_autocmd({ "CursorMoved", "BufWinEnter" }, {
+        vim.api.nvim_create_autocmd("CursorMoved", {
           group = augroup,
           buffer = bufnr,
-          callback = refresh,
+          callback = function()
+            refresh(false)
+          end,
+        })
+        vim.api.nvim_create_autocmd("BufWinEnter", {
+          group = augroup,
+          buffer = bufnr,
+          callback = function()
+            refresh(true)
+          end,
         })
       end
 
@@ -274,12 +303,12 @@ local function install_virtual_lines_handler()
           local winid = vim.fn.bufwinid(bufnr)
           local resized = vim.v.event and vim.v.event.windows
           if winid ~= -1 and (not resized or vim.tbl_contains(resized, winid)) then
-            refresh()
+            refresh(true)
           end
         end,
       })
 
-      refresh()
+      refresh(true)
     end,
 
     hide = function(namespace, bufnr)
